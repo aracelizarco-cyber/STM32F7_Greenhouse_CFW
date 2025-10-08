@@ -59,3 +59,5 @@ Roadmap
 - Add DShot bidirectional telemetry (pin-swapping, input sampling) if your ESC supports it
 - Move binary API to DMA-driven UART with sequence/ACK tracking
 - Config persistence and watchdog/BOR enable
+
+---
