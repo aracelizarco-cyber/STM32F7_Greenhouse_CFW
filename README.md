@@ -1,46 +1,61 @@
-# Greenhouse STM32F7 Starter Firmware (UART + I2C SCD41 + PWM Fans)
+# Greenhouse STM32F7 Firmware (DShot600 + Heartbeat Failsafe + Telemetry)
 
-This is a minimal, working STM32F7 codebase you can build and flash immediately using PlatformIO. It provides:
-- UART CLI for control and status (115200 8N1)
-- I2C SCD41 sensor read (CO₂ ppm, temperature, humidity) with CRC-8 validation
-- 4x PWM outputs for DC fan/ESC tests with arming and ramping
-- Clean pin config in `include/pins.h`
-
-Defaults
-- Board: NUCLEO-F722ZE (easy to compile/flash; swap pins later to match your FC)
-- Upload: DFU
+This firmware provides:
+- DShot600 motor control via TIM1 + DMA (4 channels)
+- Heartbeat-based failsafe from SBC (ramp-to-zero, auto-disarm)
+- UART CLI (text) for debugging: STATUS, ARM, DISARM, SET, GET SENSORS, GET TELEM
+- Binary command API (framed) for robust SBC control
+- SCD41 sensor via I2C (5s cadence, CRC-8 verified)
+- ESC Telemetry hook (UART; forwards raw frames; parsed RPM if format matches)
 
 Quick Start
 1. Install PlatformIO (VS Code extension) or PlatformIO Core.
 2. Open this project folder.
 3. Build:
    pio run
-4. Flash (put board in DFU mode: BOOT+USB/RESET):
+4. Flash (put board in DFU mode: BOOT + RESET or BOOT while plugging in):
    pio run -t upload
 5. Serial monitor:
    pio device monitor -b 115200
 
-CLI Commands
+Text CLI (debug)
 - STATUS
 - ARM
 - DISARM
-- SET <idx 0..3> <duty 0..1000>   (0=0%, 1000=100%)
+- SET <idx 0..3> <0..1000>       (maps to DShot throttle 48..2047 with ramping)
 - GET SENSORS
+- GET TELEM
 
-SCD41 Notes
-- Periodic mode at ~5s cadence.
-- Implemented CRC-8 (poly 0x31, init 0xFF) per Sensirion spec.
-- You can disable SCD41 by setting SCD41_ENABLE to 0 in pins.h, if needed.
+Binary API (preferred for SBC)
+Frame: 0xA5, ver=1, msg_id, seq, len, payload[len], crc16-ccitt
 
-Adapting Pins to Your Flight Controller
-- Edit include/pins.h and change:
-  - UART (which USART, pins)
-  - I2C bus (SCL/SDA)
-  - PWM timer/channel pins
-  - LED pin
-- Adjust RCC clock if needed (SystemClock_Config in src/main.c)
+Msg IDs:
+- 0x01 HEARTBEAT () → ACK only (feeds failsafe)
+- 0x02 ARM ()
+- 0x03 DISARM ()
+- 0x04 SET_MOTOR (u8 idx, u16 value_0_1000)
+- 0x05 GET_SENSORS () → response payload: co2_ppm u16, temp_c_x100 s16, rh_x100 u16
+- 0x06 GET_TELEM () → response payload: rpm[u16 x4], esc_temp_c u16 (0 if unknown), raw_len u8, raw[raw_len up to 16]
 
-Future Work
-- Swap PWM for DShot (timer+DMA based), keep the same command API.
-- Add failsafe timeout (heartbeat from SBC) to ramp down motors.
-- Integrate ESC telemetry (optional).
+Failsafe
+- SBC must send HEARTBEAT at least every 1000 ms (configurable in include/pins.h)
+- If missed:
+  - soft-failsafe: ramp motors to zero
+  - disarm once zeroed
+  - state cleared on next ARM + heartbeat
+
+Pins (default NUCLEO-F722ZE; adapt for your FC)
+- DShot outputs: TIM1 CH1..CH4 on PA8, PA9, PA10, PA11
+- SCD41: I2C1 PB8 (SCL), PB9 (SDA)
+- CLI UART2: PA2 (TX), PA3 (RX)
+- ESC Telemetry UART3 RX: PB11 (adjust to your hardware)
+
+Notes
+- DShot bit timing: 600 kHz (bit period ~1.667 µs). Timer runs at 216 MHz (ARR ~ 360 - 1).
+- Duty encoding: '1' ≈ 0.75T, '0' ≈ 0.375T.
+- DMA stream/channel mappings are MCU/board-specific. The scaffolding uses HAL TIM PWM DMA; you may need to implement MSP DMA init for your exact MCU to enable DMA transfers.
+
+Roadmap
+- Add DShot bidirectional telemetry (pin-swapping, input sampling) if your ESC supports it
+- Move binary API to DMA-driven UART with sequence/ACK tracking
+- Config persistence and watchdog/BOR enable
